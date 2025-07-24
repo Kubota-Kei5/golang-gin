@@ -13,24 +13,19 @@ func testResponse(c *gin.Context) {
 	c.String(http.StatusRequestTimeout, "timeout")
 }
 
-func timeoutMiddleware() gin.HandlerFunc {
-	return timeout.New(
-		timeout.WithTimeout(500*time.Millisecond),
-		// timeout.WithHandler(func(c *gin.Context) {
-		// 	c.Next()
-		// }),
-		timeout.WithResponse(testResponse),
-	)
+func slowHandler(c *gin.Context) {
+	time.Sleep(800 * time.Millisecond)
+	c.Status(http.StatusOK)
 }
 
 func main() {
 	r := gin.New()
-	r.Use(timeoutMiddleware())
-	r.GET("/slow", func(c *gin.Context) {
-		// 800を200などに変更して試して下さい。
-		time.Sleep(800 * time.Millisecond)
-		c.Status(http.StatusOK)
-	})
+
+	r.GET("/slow", timeout.New(
+		timeout.WithTimeout(500*time.Millisecond),
+		timeout.WithResponse(testResponse),
+	), slowHandler)
+
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
