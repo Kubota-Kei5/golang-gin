@@ -1,4 +1,4 @@
-module main.go
+module golang-gin
 
 go 1.24.4
 

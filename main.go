@@ -2,53 +2,39 @@ package main
 
 import (
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
-	ginzap "github.com/gin-contrib/zap"
+	"golang-gin/docs"
+
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
-	"main.go/logger"
+	swaggerfiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
+// HelloWorldExample godoc
+// @Summary hello World
+// @Schemes
+// @Description Hello
+// @Tags Hello World
+// @Accept json
+// @Produce json
+// @Success 200 {string} Helloworld
+// @Router /hello [get]
+func HelloWorld(g *gin.Context) {
+	g.JSON(http.StatusOK, "helloworld")
+}
+
 func main() {
-	router := gin.Default()
+	route := gin.Default()
 
-	router.Use(ginzap.Ginzap(logger.ZapLogger, time.RFC3339, true))
-
-	router.Use(ginzap.RecoveryWithZap(logger.ZapLogger, true))
-
-	router.GET("/ping", func(c *gin.Context){
-		c.JSON(http.StatusOK, gin.H{
-			"message": "pong",
-		})
-	})
-
-	router.GET("/panic", func(c *gin.Context){
-		panic("An unexpected error occurred!")
-	})
-
-	srv := &http.Server{
-		Addr: ":8080",
-		Handler: router,
-	}
-
-	if err := srv.ListenAndServe(); err != nil {
-		logger.ZapLogger.Fatal("Failed to start server", zap.Error(err))
-	}
-
-	go func() {
-		logger.Info("start server")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal(err.Error())
+	docs.SwaggerInfo.BasePath = "/api/v1"
+	v1 := route.Group("/api/v1")
+	{
+		eg := v1.Group("/")
+		{
+			eg.GET("/hello", HelloWorld)
 		}
-	}()
-	
-	quit := make(chan os.Signal)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	defer logger.Sync()
-	logger.Info("stop")
+	}
+
+	route.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerfiles.Handler))
+	route.Run(":8080")
 }
