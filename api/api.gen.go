@@ -6,8 +6,11 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -37,6 +40,361 @@ type Title = string
 
 // CreateAlbumJSONRequestBody defines body for CreateAlbum for application/json ContentType.
 type CreateAlbumJSONRequestBody = AlbumCreateRequest
+
+// RequestEditorFn  is the function signature for the RequestEditor callback function
+type RequestEditorFn func(ctx context.Context, req *http.Request) error
+
+// Doer performs HTTP requests.
+//
+// The standard http.Client implements this interface.
+type HttpRequestDoer interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// Client which conforms to the OpenAPI3 specification for this service.
+type Client struct {
+	// The endpoint of the server conforming to this interface, with scheme,
+	// https://api.deepmap.com for example. This can contain a path relative
+	// to the server, such as https://api.deepmap.com/dev-test, and all the
+	// paths in the swagger spec will be appended to the server.
+	Server string
+
+	// Doer for performing requests, typically a *http.Client with any
+	// customized settings, such as certificate chains.
+	Client HttpRequestDoer
+
+	// A list of callbacks for modifying requests which are generated before sending over
+	// the network.
+	RequestEditors []RequestEditorFn
+}
+
+// ClientOption allows setting custom parameters during construction
+type ClientOption func(*Client) error
+
+// Creates a new Client, with reasonable defaults
+func NewClient(server string, opts ...ClientOption) (*Client, error) {
+	// create a client with sane default values
+	client := Client{
+		Server: server,
+	}
+	// mutate client and add all optional params
+	for _, o := range opts {
+		if err := o(&client); err != nil {
+			return nil, err
+		}
+	}
+	// ensure the server URL always has a trailing slash
+	if !strings.HasSuffix(client.Server, "/") {
+		client.Server += "/"
+	}
+	// create httpClient, if not already present
+	if client.Client == nil {
+		client.Client = &http.Client{}
+	}
+	return &client, nil
+}
+
+// WithHTTPClient allows overriding the default Doer, which is
+// automatically created using http.Client. This is useful for tests.
+func WithHTTPClient(doer HttpRequestDoer) ClientOption {
+	return func(c *Client) error {
+		c.Client = doer
+		return nil
+	}
+}
+
+// WithRequestEditorFn allows setting up a callback function, which will be
+// called right before sending the request. This can be used to mutate the request.
+func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
+	return func(c *Client) error {
+		c.RequestEditors = append(c.RequestEditors, fn)
+		return nil
+	}
+}
+
+// The interface specification for the client above.
+type ClientInterface interface {
+	// CreateAlbumWithBody request with any body
+	CreateAlbumWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateAlbum(ctx context.Context, body CreateAlbumJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetAlbum request
+	GetAlbum(ctx context.Context, id int, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) CreateAlbumWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAlbumRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateAlbum(ctx context.Context, body CreateAlbumJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateAlbumRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetAlbum(ctx context.Context, id int, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetAlbumRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// NewCreateAlbumRequest calls the generic CreateAlbum builder with application/json body
+func NewCreateAlbumRequest(server string, body CreateAlbumJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateAlbumRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateAlbumRequestWithBody generates requests for CreateAlbum with any type of body
+func NewCreateAlbumRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/album")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetAlbumRequest generates requests for GetAlbum
+func NewGetAlbumRequest(server string, id int) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/album/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
+	for _, r := range c.RequestEditors {
+		if err := r(ctx, req); err != nil {
+			return err
+		}
+	}
+	for _, r := range additionalEditors {
+		if err := r(ctx, req); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ClientWithResponses builds on ClientInterface to offer response payloads
+type ClientWithResponses struct {
+	ClientInterface
+}
+
+// NewClientWithResponses creates a new ClientWithResponses, which wraps
+// Client with return type handling
+func NewClientWithResponses(server string, opts ...ClientOption) (*ClientWithResponses, error) {
+	client, err := NewClient(server, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &ClientWithResponses{client}, nil
+}
+
+// WithBaseURL overrides the baseURL.
+func WithBaseURL(baseURL string) ClientOption {
+	return func(c *Client) error {
+		newBaseURL, err := url.Parse(baseURL)
+		if err != nil {
+			return err
+		}
+		c.Server = newBaseURL.String()
+		return nil
+	}
+}
+
+// ClientWithResponsesInterface is the interface specification for the client with responses above.
+type ClientWithResponsesInterface interface {
+	// CreateAlbumWithBodyWithResponse request with any body
+	CreateAlbumWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAlbumResponse, error)
+
+	CreateAlbumWithResponse(ctx context.Context, body CreateAlbumJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAlbumResponse, error)
+
+	// GetAlbumWithResponse request
+	GetAlbumWithResponse(ctx context.Context, id int, reqEditors ...RequestEditorFn) (*GetAlbumResponse, error)
+}
+
+type CreateAlbumResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateAlbumResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateAlbumResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetAlbumResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *AlbumGetResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetAlbumResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetAlbumResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// CreateAlbumWithBodyWithResponse request with arbitrary body returning *CreateAlbumResponse
+func (c *ClientWithResponses) CreateAlbumWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateAlbumResponse, error) {
+	rsp, err := c.CreateAlbumWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAlbumResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateAlbumWithResponse(ctx context.Context, body CreateAlbumJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateAlbumResponse, error) {
+	rsp, err := c.CreateAlbum(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateAlbumResponse(rsp)
+}
+
+// GetAlbumWithResponse request returning *GetAlbumResponse
+func (c *ClientWithResponses) GetAlbumWithResponse(ctx context.Context, id int, reqEditors ...RequestEditorFn) (*GetAlbumResponse, error) {
+	rsp, err := c.GetAlbum(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetAlbumResponse(rsp)
+}
+
+// ParseCreateAlbumResponse parses an HTTP response from a CreateAlbumWithResponse call
+func ParseCreateAlbumResponse(rsp *http.Response) (*CreateAlbumResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateAlbumResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseGetAlbumResponse parses an HTTP response from a GetAlbumWithResponse call
+func ParseGetAlbumResponse(rsp *http.Response) (*GetAlbumResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetAlbumResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AlbumGetResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -128,14 +486,13 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"H4sIAAAAAAAC/7SSQWsbMRCF/8oy7XFZbZoegm5pQo0ptCX4FnyQd19shV1JkWZdjNF/L5Ls1nECvrTs",
-	"YcVo9GbeN7Onzo7OGhgOJPcUug1GlY+3w2oa7zwU4wEvEwKnqPPWwbNGzmHNA9Lho8cTSfog/sqJg5ZY",
-	"5KQYa/J4mbRHT/Lx8HRZE+8cSJJdPaNjinUpPAM/IDhrAt6W1f2lmvP7pPRf2pvfZ+clrA1jDZ/ii2Ox",
-	"w1Vgr82aYlLW5sme8KKZrW5/zqsFRjcoBtW0hQ/aGpJ01bRNmwStg1FOk6Trpm2uqSaneJMBCJUYZTC2",
-	"zCXhUaytmfckqYwtg6TiC4G/2H6XUjtrGCa/Us4NusvvxHNI5Y8rcInaO9sRXzNkPyEHyhRz35/az+nX",
-	"I3ReOy6Gv9vq7tBSUgjTOCq/++OiUpXBr6o4TgnFvNjrPiaxNd4BMAMf3Tvl1QiGDyQf96RTyQSSajJq",
-	"zEPs6bzx+gTD+ajj8o2r9t9yPV3+TPU1sB/fzkB91aYvgKrVrkq7n+/ht0fXkx9I0obZSSHaJn/ypr1p",
-	"hXJabK8oLuPvAAAA//9f/IhoDAQAAA==",
+	"H4sIAAAAAAAC/7SST2/bMAzFv4rB7WjE3rqTb12LBcGAbShyK3pQrNdURfSnEr0hCPTdB0rOlqYFetlO",
+	"Fmjyke9HHmj0NngHx4mGA6XxAVaV5+VuM9mrCMW4wdOExBIN0QdENig5bHgHebyPuKeB3nV/5bpZq1uX",
+	"pJxbiniaTISm4XYuvWuJ9wE0kN88YmTKbW28BN8gBe8SXrY1+q2eq2tR+i/jra6L8xo2jrFFlPj62Gz+",
+	"lTgat6Usysbd+xNetPTN5Y9Vs4YNO8Wgln4iJuMdDfRh0S96EfQBTgVDA10s+sUFtRQUPxQAnRJGBYyv",
+	"exE8io13K00D1bUVkFR9IfFnr/eSOnrHcKVKhbAzY6nrHpO0P57AW9ReuY78nCHHCSVQt1jm/th/ko9G",
+	"GqMJXA1/883VPJIopMlaFfd/XDSqcfjVVMeSUM13B6OziG3xCoAl+Og+qKgsGDHRcHsgIy0FJLXklC1L",
+	"1HQ+eHuC4XzV+e6Fq/7fcj09/kL1ObDvX89AfTFOV0DNZt/I7eecfwcAAP//zO5HXtsDAAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
