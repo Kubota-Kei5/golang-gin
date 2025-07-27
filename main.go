@@ -1,20 +1,32 @@
 package main
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
+
+	"golang-gin/controllers"
+	"golang-gin/models"
 )
 
 func setupRouter() *gin.Engine {
-	r := gin.Default()
-	r.GET("/ping", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"message": "pong"})
-	})
-	return r
+	router := gin.Default()
+	router.GET("/ping", controllers.Ping)
+
+	albumHandler := controllers.AlbumHandler{}
+	router.POST("/album", albumHandler.CreateAlbum)
+	router.GET("/album/:id", albumHandler.GetAlbum)
+	router.DELETE("/album/:id", albumHandler.DeleteAlbum)
+	return router
 }
 
 func main() {
-	r := setupRouter()
-	r.Run(":8080")
+	db, _ := models.ConnectToDB()
+	models.DB = db
+
+	albumModels := []interface{}{&models.Album{}}
+	for _, val := range albumModels {
+		models.DB.AutoMigrate(val)
+	}
+
+	router := setupRouter()
+	router.Run(":8080")
 }
